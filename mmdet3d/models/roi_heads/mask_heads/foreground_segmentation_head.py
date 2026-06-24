@@ -170,5 +170,9 @@ class ForegroundSegmentationHead(BaseModule):
         seg_weights /= torch.clamp(pos_normalizer, min=1.0)
 
         seg_preds = torch.sigmoid(seg_preds)
+        # Guard against NaN logits (unstable early training) that would
+        # trigger CUDA binary_cross_entropy assert on values outside [0,1].
+        seg_preds = torch.nan_to_num(seg_preds, nan=0.5, posinf=1.0 - 1e-6,
+                                     neginf=1e-6)
         loss_seg = self.loss_seg(seg_preds, (~positives).long(), seg_weights)
         return dict(loss_semantic=loss_seg)

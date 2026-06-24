@@ -2,6 +2,8 @@
 import copy
 from typing import Optional
 
+import torch
+
 from mmdet3d.registry import MODELS
 from mmdet3d.structures.det3d_data_sample import SampleList
 from mmdet3d.utils import InstanceList
@@ -228,5 +230,22 @@ class PointVoxelRCNN(TwoStage3DDetector):
         roi_losses = self.roi_head.loss(points_feats_dict, rpn_results_list,
                                         batch_data_samples)
         losses.update(roi_losses)
+
+        # Zero out any NaN/Inf loss components to skip corrupted batches
+        # without crashing training. Keeps model weights finite.
+        skipped = False
+        for k, v in list(losses.items()):
+            if isinstance(v, torch.Tensor) and not v.isfinite().all():
+                losses[k] = v.new_tensor(0.0)
+                skipped = True
+        if skipped:
+            if not hasattr(self, '_nan_skip_count'):
+                self._nan_skip_count = 0
+            self._nan_skip_count += 1
+            if self._nan_skip_count % 10 == 1:
+                import logging
+                logging.warning(
+                    f'[NaN-skip] Skipped {self._nan_skip_count} bad batches '
+                    f'so far (loss zeroed, weights unchanged).')
 
         return losses

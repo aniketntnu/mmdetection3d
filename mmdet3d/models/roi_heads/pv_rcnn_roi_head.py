@@ -4,6 +4,7 @@ from typing import List, Optional
 import torch
 from mmdet.models.task_modules import AssignResult
 from mmdet.models.task_modules.samplers import SamplingResult
+from mmengine.structures import InstanceData
 from torch.nn import functional as F
 
 from mmdet3d.models.roi_heads.base_3droi_head import Base3DRoIHead
@@ -171,9 +172,17 @@ class PVRCNNRoiHead(Base3DRoIHead):
         Returns:
             dict: Forward results including losses and predictions.
         """
-        rois = bbox3d2roi([res.bboxes for res in sampling_results])
+        bboxes_list = [res.bboxes for res in sampling_results]
+        rois = bbox3d2roi(bboxes_list)
         keypoint_features = keypoint_features * seg_preds.sigmoid().max(
             dim=-1, keepdim=True).values
+
+        # Skip forward when all proposals are empty (avoids CUDA kernel errors)
+        if rois.size(0) == 0:
+            zero = rois.new_tensor(0.0)
+            return dict(loss_bbox=dict(loss_cls=zero, loss_bbox=zero,
+                                       loss_corner=zero))
+
         bbox_results = self._bbox_forward(keypoint_features, keypoints, rois)
 
         bbox_targets = self.bbox_head.get_targets(sampling_results,
@@ -246,13 +255,26 @@ class PVRCNNRoiHead(Base3DRoIHead):
             batch_gt_labels = cur_gt_labels.new_full((len(cur_boxes), ), -1)
 
             # each class may have its own assigner
+            # Ensure labels are 1D — avoid InstanceData bool-indexing bugs
+            # when proposals InstanceData has fields with unexpected shapes.
+            cur_labels_3d = cur_labels_3d.view(-1)
+            cur_gt_labels = cur_gt_labels.view(-1)
             if isinstance(self.bbox_assigner, list):
                 for i, assigner in enumerate(self.bbox_assigner):
                     gt_per_cls = (cur_gt_labels == i)
                     pred_per_cls = (cur_labels_3d == i)
-                    cur_assign_res = assigner.assign(
-                        cur_proposal_list[pred_per_cls],
-                        cur_gt_instances_3d[gt_per_cls])
+                    # Build minimal InstanceData subsets manually to avoid
+                    # InstanceData boolean-masking failures from fields with
+                    # inconsistent first-dim shapes (e.g. [1,0,3] tensors).
+                    pred_inds = pred_per_cls.nonzero(as_tuple=False).view(-1)
+                    gt_inds_cls = gt_per_cls.nonzero(as_tuple=False).view(-1)
+                    cls_proposals = InstanceData()
+                    cls_proposals.bboxes_3d = cur_boxes[pred_inds]
+                    cls_gt = InstanceData()
+                    cls_gt.bboxes_3d = cur_gt_instances_3d.bboxes_3d[
+                        gt_inds_cls]
+                    cls_gt.labels_3d = cur_gt_labels[gt_inds_cls]
+                    cur_assign_res = assigner.assign(cls_proposals, cls_gt)
                     # gather assign_results in different class into one result
                     batch_num_gts += cur_assign_res.num_gts
                     # gt inds (1-based)

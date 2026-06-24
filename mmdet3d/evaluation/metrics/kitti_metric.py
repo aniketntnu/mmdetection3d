@@ -94,10 +94,17 @@ class KittiMetric(BaseMetric):
         Returns:
             List[dict]: List of Kitti annotations.
         """
-        data_annos = data_infos['data_list']
-        if not self.format_only:
+        # Support both mmdet3d dict format and plain-list format (A2D2)
+        if isinstance(data_infos, list):
+            data_annos = data_infos
+            label2cat = {0: 'Car', 1: 'Truck', 2: 'Bus',
+                         3: 'Pedestrian', 4: 'Cyclist'}
+        else:
+            data_annos = data_infos['data_list']
             cat2label = data_infos['metainfo']['categories']
             label2cat = dict((v, k) for (k, v) in cat2label.items())
+        if not self.format_only:
+            pass  # label2cat already set above
             assert 'instances' in data_annos[0]
             for i, annos in enumerate(data_annos):
                 if len(annos['instances']) == 0:
@@ -125,18 +132,25 @@ class KittiMetric(BaseMetric):
                         'score': []
                     }
                     for instance in annos['instances']:
-                        label = instance['bbox_label']
+                        label = instance.get('bbox_label',
+                                             instance.get('bbox_label_3d', 0))
                         kitti_annos['name'].append(label2cat[label])
-                        kitti_annos['truncated'].append(instance['truncated'])
-                        kitti_annos['occluded'].append(instance['occluded'])
-                        kitti_annos['alpha'].append(instance['alpha'])
-                        kitti_annos['bbox'].append(instance['bbox'])
-                        kitti_annos['location'].append(instance['bbox_3d'][:3])
+                        kitti_annos['truncated'].append(
+                            instance.get('truncated', 0.0))
+                        kitti_annos['occluded'].append(
+                            instance.get('occluded', 0))
+                        kitti_annos['alpha'].append(
+                            instance.get('alpha', -10.0))
+                        kitti_annos['bbox'].append(
+                            instance.get('bbox', [0, 0, 1, 1]))
+                        kitti_annos['location'].append(
+                            instance['bbox_3d'][:3])
                         kitti_annos['dimensions'].append(
                             instance['bbox_3d'][3:6])
                         kitti_annos['rotation_y'].append(
                             instance['bbox_3d'][6])
-                        kitti_annos['score'].append(instance['score'])
+                        kitti_annos['score'].append(
+                            instance.get('score', -1.0))
                     for name in kitti_annos:
                         kitti_annos[name] = np.array(kitti_annos[name])
                 data_annos[i]['kitti_annos'] = kitti_annos
@@ -346,8 +360,9 @@ class KittiMetric(BaseMetric):
             info = self.data_infos[sample_idx]
             # Here default used 'CAM2' to compute metric. If you want to
             # use another camera, please modify it.
-            image_shape = (info['images'][self.default_cam_key]['height'],
-                           info['images'][self.default_cam_key]['width'])
+            cam_info = info['images'].get(self.default_cam_key, {})
+            image_shape = (cam_info.get('height', 1208),
+                           cam_info.get('width', 1920))
             box_dict = self.convert_valid_bboxes(pred_dicts, info)
             anno = {
                 'name': [],
@@ -590,45 +605,52 @@ class KittiMetric(BaseMetric):
                 scores=np.zeros([0]),
                 label_preds=np.zeros([0, 4]),
                 sample_idx=sample_idx)
-        # Here default used 'CAM2' to compute metric. If you want to
-        # use another camera, please modify it.
-        lidar2cam = np.array(
-            info['images'][self.default_cam_key]['lidar2cam']).astype(
-                np.float32)
-        P2 = np.array(info['images'][self.default_cam_key]['cam2img']).astype(
-            np.float32)
-        img_shape = (info['images'][self.default_cam_key]['height'],
-                     info['images'][self.default_cam_key]['width'])
-        P2 = box_preds.tensor.new_tensor(P2)
-
-        if isinstance(box_preds, LiDARInstance3DBoxes):
-            box_preds_camera = box_preds.convert_to(Box3DMode.CAM, lidar2cam)
-            box_preds_lidar = box_preds
-        elif isinstance(box_preds, CameraInstance3DBoxes):
-            box_preds_camera = box_preds
-            box_preds_lidar = box_preds.convert_to(Box3DMode.LIDAR,
-                                                   np.linalg.inv(lidar2cam))
-
-        box_corners = box_preds_camera.corners
-        box_corners_in_image = points_cam2img(box_corners, P2)
-        # box_corners_in_image: [N, 8, 2]
-        minxy = torch.min(box_corners_in_image, dim=1)[0]
-        maxxy = torch.max(box_corners_in_image, dim=1)[0]
-        box_2d_preds = torch.cat([minxy, maxxy], dim=1)
-        # Post-processing
-        # check box_preds_camera
-        image_shape = box_preds.tensor.new_tensor(img_shape)
-        valid_cam_inds = ((box_2d_preds[:, 0] < image_shape[1]) &
-                          (box_2d_preds[:, 1] < image_shape[0]) &
-                          (box_2d_preds[:, 2] > 0) & (box_2d_preds[:, 3] > 0))
-        # check box_preds_lidar
-        if isinstance(box_preds, LiDARInstance3DBoxes):
+        # A2D2 PKL has no lidar2cam — skip camera projection, use lidar range only
+        cam_info = info.get('images', {}).get(self.default_cam_key, {})
+        if 'lidar2cam' not in cam_info:
+            box_preds_lidar = box_preds if isinstance(
+                box_preds, LiDARInstance3DBoxes) else box_preds
+            box_preds_camera = box_preds_lidar  # dummy, not used
             limit_range = box_preds.tensor.new_tensor(self.pcd_limit_range)
             valid_pcd_inds = ((box_preds_lidar.center > limit_range[:3]) &
                               (box_preds_lidar.center < limit_range[3:]))
-            valid_inds = valid_cam_inds & valid_pcd_inds.all(-1)
+            valid_inds = valid_pcd_inds.all(-1)
+            box_2d_preds = box_preds.tensor.new_zeros(
+                (len(box_preds), 4))  # dummy 2D boxes
         else:
-            valid_inds = valid_cam_inds
+            # Here default used 'CAM2' to compute metric.
+            lidar2cam = np.array(cam_info['lidar2cam']).astype(np.float32)
+            P2 = np.array(cam_info['cam2img']).astype(np.float32)
+            img_shape = (cam_info['height'], cam_info['width'])
+            P2 = box_preds.tensor.new_tensor(P2)
+
+            if isinstance(box_preds, LiDARInstance3DBoxes):
+                box_preds_camera = box_preds.convert_to(
+                    Box3DMode.CAM, lidar2cam)
+                box_preds_lidar = box_preds
+            elif isinstance(box_preds, CameraInstance3DBoxes):
+                box_preds_camera = box_preds
+                box_preds_lidar = box_preds.convert_to(
+                    Box3DMode.LIDAR, np.linalg.inv(lidar2cam))
+
+            box_corners = box_preds_camera.corners
+            box_corners_in_image = points_cam2img(box_corners, P2)
+            minxy = torch.min(box_corners_in_image, dim=1)[0]
+            maxxy = torch.max(box_corners_in_image, dim=1)[0]
+            box_2d_preds = torch.cat([minxy, maxxy], dim=1)
+            image_shape = box_preds.tensor.new_tensor(img_shape)
+            valid_cam_inds = ((box_2d_preds[:, 0] < image_shape[1]) &
+                              (box_2d_preds[:, 1] < image_shape[0]) &
+                              (box_2d_preds[:, 2] > 0) &
+                              (box_2d_preds[:, 3] > 0))
+            if isinstance(box_preds, LiDARInstance3DBoxes):
+                limit_range = box_preds.tensor.new_tensor(self.pcd_limit_range)
+                valid_pcd_inds = (
+                    (box_preds_lidar.center > limit_range[:3]) &
+                    (box_preds_lidar.center < limit_range[3:]))
+                valid_inds = valid_cam_inds & valid_pcd_inds.all(-1)
+            else:
+                valid_inds = valid_cam_inds
 
         if valid_inds.sum() > 0:
             return dict(

@@ -308,6 +308,11 @@ class Anchor3DHead(Base3DDenseHead, AnchorTrainMixin):
             if self.diff_rad_by_sin:
                 pos_bbox_pred, pos_bbox_targets = self.add_sin_difference(
                     pos_bbox_pred, pos_bbox_targets)
+            # Guard against NaN/Inf regression targets from unusual boxes
+            pos_bbox_pred = torch.nan_to_num(pos_bbox_pred, nan=0.0,
+                                             posinf=10.0, neginf=-10.0)
+            pos_bbox_targets = torch.nan_to_num(pos_bbox_targets, nan=0.0,
+                                                posinf=10.0, neginf=-10.0)
             loss_bbox = self.loss_bbox(
                 pos_bbox_pred,
                 pos_bbox_targets,

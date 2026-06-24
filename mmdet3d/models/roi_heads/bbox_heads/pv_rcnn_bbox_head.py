@@ -237,9 +237,16 @@ class PVRCNNBBoxHead(BaseModule):
 
                 pred_boxes3d[:, 0:3] += roi_xyz
 
-                # calculate corner loss
+                # calculate corner loss — guard NaN/explosion from bad batches
+                pred_boxes3d = torch.nan_to_num(pred_boxes3d, nan=0.0,
+                                                posinf=100.0, neginf=-100.0)
+                pred_boxes3d = pred_boxes3d.clamp(-100.0, 100.0)
                 loss_corner = self.get_corner_loss_lidar(
                     pred_boxes3d, pos_gt_bboxes)
+                # Clamp per-box corner loss to ≤20m to prevent gradient explosion
+                loss_corner = loss_corner.clamp(max=20.0)
+                loss_corner = torch.nan_to_num(loss_corner, nan=0.0,
+                                               posinf=0.0, neginf=0.0)
                 losses['loss_corner'] = loss_corner.mean()
 
         return losses
