@@ -147,3 +147,4 @@ allEnv/
 *.pkl
 *.npz
 camera_lidar_semantic_bboxes/
+.github/
