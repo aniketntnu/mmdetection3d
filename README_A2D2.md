@@ -372,6 +372,20 @@ scp user@server:/path/mmdetection3d/outputs/gt_verification_h264.avi .
 
 ## 8. Results
 
+### Model Downloads (GitHub Release v1.0-models)
+
+| Model | Size | Download |
+|-------|------|----------|
+| PV-RCNN (epoch 1000) | **226 MB** | [pvrcnn_a2d2_epoch1000.pth](https://github.com/aniketntnu/mmdetection3d/releases/download/v1.0-models/pvrcnn_a2d2_epoch1000.pth) |
+| PointPillars (epoch 1000) | **73 MB** | [pointpillars_a2d2_epoch1000.pth](https://github.com/aniketntnu/mmdetection3d/releases/download/v1.0-models/pointpillars_a2d2_epoch1000.pth) |
+
+Release page: https://github.com/aniketntnu/mmdetection3d/releases/tag/v1.0-models
+
+### Training Logs
+Full training logs in `training_logs/`:
+- `training_logs/pvrcnn_a2d2_1000epochs.log` — PV-RCNN (2.4MB)
+- `training_logs/pointpillars_a2d2_1000epochs.log` — PointPillars (765KB)
+
 ### PV-RCNN on A2D2 (1000 epochs)
 | Epoch | Loss |
 |-------|------|
@@ -380,11 +394,6 @@ scp user@server:/path/mmdetection3d/outputs/gt_verification_h264.avi .
 | 100 | ~2.0 |
 | 500 | ~1.2 |
 | 1000 | **0.644** |
-
-Final model: `work_dirs/pv_rcnn_a2d2/epoch_1000.pth` (226MB)
-
-### PointPillars on A2D2 (1000 epochs)
-Final model: `work_dirs/pointpillars_a2d2/epoch_1000.pth`
 
 ### Videos Available
 - `outputs/pred_videos/pred_epoch_040.mp4` — early model (epoch 40)
